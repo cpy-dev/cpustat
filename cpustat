@@ -1,0 +1,159 @@
+#!/usr/bin/python3
+
+from subprocess import getoutput as terminal
+import time
+from curses import wrapper, curs_set
+import sys
+
+def makeBar(percent, width, title='', suffix=''):
+    bar = [
+        [' ' * (len(title) + 1), '╔'],
+        [title + ' ', '║'],
+        [' ' * (len(title) + 1), '╚']
+    ]
+
+    bars = round(percent * width / 100)
+    bar[0].append('▃' * bars)
+    bar[1].append('█' * bars)
+    bar[2].append('🮃' * bars)
+
+    blanks = round((100 - round(percent)) * width / 100)
+    bar[0].append(' ' * blanks)
+    bar[1].append(' ' * blanks)
+    bar[2].append(' ' * blanks)
+
+    bar[0].append('╗')
+    bar[1].append('║')
+    bar[1].append(f' {suffix}')
+    bar[2].append('╝')
+
+    return tuple(''.join(line) for line in bar)
+
+def getUsage(last, now):
+    lastSum = 0
+    for element in last.split(' '):
+        if element != '':
+            lastSum += int(element)
+
+    nowSum = 0
+    for element in now.split(' '):
+        if element != '':
+            nowSum += int(element)
+
+    delta = nowSum - lastSum
+    idle = int(now.split(' ')[3]) - int(last.split(' ')[3])
+
+    used = delta - idle
+    usage = 100 * used / delta
+
+    return usage
+
+def main(screen, *args):
+    curs_set(False)
+
+    while True:
+        screen.clear()
+        text = ''
+
+        last = terminal('grep cpu /proc/stat | awk \'{ $1=""; print }\'').strip().split('\n')
+        time.sleep(0.5)
+        now = terminal('grep cpu /proc/stat | awk \'{ $1=""; print }\'').strip().split('\n')
+
+        cpuModel = terminal('cat /proc/cpuinfo | grep "model name" -m 1 | awk -F \':\' \'{ print $2 }\'').strip()
+        text += 'CPU model'.ljust(18) + ': ' + cpuModel + '\n'
+
+        numberOfCores = terminal('grep -m 1 "cpu cores" /proc/cpuinfo | awk -F \':\' \'{ print $2 }\'').strip()
+        text += 'Number of cores'.ljust(18) + ': ' + numberOfCores + '\n'
+
+        numberOfCpuThreads = terminal('grep processor -w -c /proc/cpuinfo').strip()
+        text += 'Number of threads'.ljust(18) + ': ' + numberOfCpuThreads + '\n'
+
+        minFrequency = round(
+            min(
+                [int(freq) for freq in
+                 terminal('echo $(cat /sys/devices/system/cpu/cpufreq/policy*/cpuinfo_min_freq)').split(' ')]
+            ) / 1000000, 2
+        )
+
+        maxFrequency = round(
+            max(
+                [int(freq) for freq in
+                 terminal('echo $(cat /sys/devices/system/cpu/cpufreq/policy*/cpuinfo_max_freq)').split(' ')]
+            ) / 1000000, 2
+        )
+        
+        if 'boost' in terminal('ls /sys/devices/system/cpu/cpufreq'):
+            boost = 'Active' if terminal('cat /sys/devices/system/cpu/cpufreq/boost') == '1' else 'Not active'
+
+        else:
+            boost = 'Not available'
+
+        text += 'Min frequency'.ljust(18) + ': ' + str(minFrequency).ljust(4) + ' GHz\n'
+        text += 'Max frequency'.ljust(18) + ': ' + str(maxFrequency).ljust(4) + ' GHz\n'
+        text += 'Frequency boost'.ljust(18) + ': ' + boost + '\n'
+
+        frequencies = terminal(
+            'echo $(cat /proc/cpuinfo | grep "cpu MHz" | awk -F \':\' \'{ print $2 }\')'
+        ).strip().split(' ')
+
+        average = 0
+        for frequency in frequencies:
+            average += float(frequency)
+
+        average /= int(numberOfCpuThreads)
+        baseLength = 26
+        _, cols = screen.getmaxyx()
+
+        freeSpace = int((cols - (baseLength * 2)) / 2 - 10) - 10
+        mid = int(cols / 2)
+
+        for i in range(len(now)):
+            usage = getUsage(
+                last[i].strip(),
+                now[i].strip()
+            )
+
+            if not i:
+                text += '\n'.join(
+                    makeBar(usage, freeSpace * 2 + baseLength + 20, 'Average'.ljust(9),
+                            f'{round(usage, 2)}'.center(10) + '%    @' +
+                            f'{round(average / 1000, 2)} GHz'.rjust(10))
+                ) + '\n'
+
+            else:
+                if i <= int(numberOfCpuThreads) / 2:
+                    bar = makeBar(usage, freeSpace, f'Thread {i - 1}'.ljust(9),
+                                  f'{round(usage, 2)}'.center(10) + '%    @' +
+                                  f'{round(float(frequencies[i - 1]) / 1000, 2)} GHz'.rjust(10))
+
+                    screen.addstr(9 + 3 * (i-1), 0, bar[0])
+                    screen.addstr(9 + 3 * (i-1) + 1, 0, bar[1])
+                    screen.addstr(9 + 3 * (i-1) + 2, 0, bar[2])
+
+                else:
+                    bar = makeBar(usage, freeSpace, f'Thread {i - 1}'.ljust(9),
+                                  f'{round(usage, 2)}'.center(10) + '%    @' +
+                                  f'{round(float(frequencies[i - 1]) / 1000, 2)} GHz'.rjust(10))
+
+                    screen.addstr(9 + 3 * (i - 9), mid, bar[0])
+                    screen.addstr(9 + 3 * (i - 9) + 1, mid, bar[1])
+                    screen.addstr(9 + 3 * (i - 9) + 2, mid, bar[2])
+
+        screen.addstr(0, 0, text)
+        screen.refresh()
+
+if __name__ == '__main__':
+    if '--help' in sys.argv or '-h' in sys.argv:
+        print('''Relevant info about the processor
+usage: cpustat [OPTIONS]
+
+options: 
+    --help, -h      Show this message and exit
+''')
+        sys.exit(0)
+
+    try:
+        wrapper(main)
+
+    except KeyboardInterrupt:
+        pass
